@@ -77,8 +77,9 @@ def model_1(sequences, lengths, args, batch_size=None, include_prior=True):
                 # On the next line, we'll overwrite the value of x with an updated
                 # value. If we wanted to record all x values, we could instead
                 # write x[t] = pyro.sample(...x[t-1]...).
-                x = pyro.sample("x_{}".format(t), dist.Categorical(probs_x[x]),
+                x = pyro.sample(f"x_{t}", dist.Categorical(probs_x[x]),
                                 infer={"enumerate": "parallel"})
+                                #infer={"enumerate": "sequential"})
                 with tones_iarange:
                     pyro.sample("y_{}".format(t), dist.Bernoulli(probs_y[x]),
                                 obs=sequences[batch, t])
