@@ -9,6 +9,8 @@ import torch.nn.functional as F
 
 import torchtext.data as data
 
+from opt_einsum import shared_intermediates
+
 import pyro
 import pyro.distributions as ds
 from pyro import poutine
@@ -92,6 +94,99 @@ class HMM:
         self.V = V
         self.C = C
         self.batch_x = False
+
+    def guide(self, data):
+        return self.model(data, observe=False)
+
+    def model(self, data, observe=True):
+        V, C = self.V, self.C
+        N, T = data.shape
+
+        pz = pyro.param("pz", torch.rand(C), constraint=constraints.simplex)
+        pz_z = pyro.param("pz_z", torch.rand(C, C), constraint=constraints.simplex)
+        px_z = pyro.param("px_z", torch.rand(C, V), constraint=constraints.simplex)
+
+        x_iarange = pyro.iarange("T", T)
+        with pyro.iarange("n", N, subsample_size=BSZ) as ind:
+            zs = []
+            ht = None
+            # Assume first token is bos (probably not true, lol)
+            for t in range(1, T):
+                dzt = ds.Categorical(pz_z[zt] if t > 1 else pz.expand(BSZ, C))
+                zt = pyro.sample(
+                    f"z_{t}", dzt,
+                    infer = {"enumerate": enum_style}
+                )
+                zs.append(zt)
+                if observe and not self.batch_x:
+                    dxt = ds.Categorical(px_z[zt])
+                    xt = pyro.sample(f"x_{t}", dxt, obs = data[ind, t])
+            if observe and self.batch_x:
+                z = torch.stack(zs) # T x N
+                with pyro.iarange("T", T) as t:
+                    dxt = ds.Categorical(px_z[z])
+                    xt = pyro.sample(f"x", dxt, obs = data[ind].t())
+
+
+class MyHMM:
+    def __init__(self, V, C):
+        self.V = V
+        self.C = C
+        self.batch_x = True
+
+        self.pz = pyro.param("pz", torch.rand(C), constraint=constraints.simplex)
+        self.pz_z = pyro.param("pz_z", torch.rand(C, C), constraint=constraints.simplex)
+        self.px_z = pyro.param("px_z", torch.rand(C, V), constraint=constraints.simplex)
+
+    def forward_sample(self, T, N):
+        zs = [ds.Categorical(self.pz).sample([N])]
+        xs = [ds.Categorical(self.px_z[zs[0]]).sample()]
+        for t in range(1, T):
+            zs.append(ds.Categorical(self.pz_z[zs[-1]]).sample())
+            xs.append(ds.Categorical(self.px_z[zs[-1]]).sample())
+        return torch.stack(xs), torch.stack(zs)
+
+    def forward_m(self, x, cache=None):
+        T, N = x.shape
+        pxs = self.px_z[:,xs].permute(1, 2, 0) # T x N x C
+        zs = torch.FloatTensor(T, N, C).to(x.device).fill_(0)
+        zs[0] = pxs[0] * self.pz
+        import pdb; pdb.set_trace()
+        return zs, cache
+
+    def forward_e(self, x, cache=None):
+        import pdb; pdb.set_trace()
+        return zs, cache
+
+    def backward_m(self, x, cache=None):
+        import pdb; pdb.set_trace()
+        return zs, cache
+
+    def backward_e(self, x, cache=None):
+        import pdb; pdb.set_trace()
+        return zs, cache
+
+    def forward_backward(self, x, cache=None):
+        import pdb; pdb.set_trace()
+        return zs, cache
+
+    def marginals(self, xx):
+        pass
+
+hmm = MyHMM(V, C)
+xs, zs = hmm.forward_sample(5, 2)
+alphas_m, _ = hmm.forward_m(xs)
+betas_m, _ = hmm.backward_m(xs)
+with shared_intermediates() as cache:
+    alphas_e, _ = hmm.forward_e(xs, cache)
+    betas_e, _ = hmm.backward_e(xs, cache)
+import pdb; pdb.set_trace()
+
+class NeuralHMM:
+    def __init__(self, V, C):
+        self.V = V
+        self.C = C
+        self.batch_x = False
         self.transition = True
 
         if self.transition:
@@ -154,6 +249,7 @@ class HMM:
                     dxt = ds.Categorical(px_z[z])
                     xt = pyro.sample(f"x", dxt, obs = data[ind].t())
 
+
 class HSMM:
     def __init__(self, V, C):
         self.V = V
@@ -211,6 +307,7 @@ def optimize_direct(model, data, lr=1e-3):
 #models = [(HMM(config), 1e-1), (NaiveBayes(config), 1e-1),  RNNMixture(config)]
 #models = [(NaiveBayes(*config), 1e-1)]
 models = [(HMM(*config), 1e-1)]
+models = [(MyHMM(*config), 1e-1)]
 
 traces = []
 for m, lr in models:
