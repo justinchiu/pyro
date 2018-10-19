@@ -16,6 +16,8 @@ import pyro.distributions as ds
 from pyro import poutine
 from pyro.infer import TraceEnum_ELBO
 import pyro.optim
+from pyro.ops.contract import ubersum
+
 
 logging.basicConfig(format='%(relativeCreated) 9d %(message)s', level=logging.INFO)
 pyro.enable_validation(True)
@@ -148,14 +150,19 @@ class MyHMM:
 
     def forward_m(self, x, cache=None):
         T, N = x.shape
-        pxs = self.px_z[:,xs].permute(1, 2, 0) # T x N x C
+        pxs = self.px_z[:,xs].permute(1, 2, 0).log() # T x N x C
+        pz_z = self.pz_z.log()
         zs = torch.FloatTensor(T, N, C).to(x.device).fill_(0)
-        zs[0] = pxs[0] * self.pz
-        import pdb; pdb.set_trace()
-        return zs, cache
+        zs[0] = pxs[0] + self.pz.log()
+        for t in range(1, T):
+            zs[t] = pxs[t] + torch.logsumexp(zs[t-1].unsqueeze(-1) + pz_z, dim=-1)
+        return zs.exp(), cache
 
     def forward_e(self, x, cache=None):
-        import pdb; pdb.set_trace()
+        with shared_intermediates(cache):
+            # do i need to pass in log px's as ref?
+            pxs = self.px_z[:,xs].permute(1, 2, 0).log() # T x N x C
+            import pdb; pdb.set_trace()
         return zs, cache
 
     def backward_m(self, x, cache=None):
