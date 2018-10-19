@@ -156,7 +156,7 @@ class HMM:
         pxs = self.px_z[:,x].permute(1, 2, 0).log() # T x N x C
         pz_z = self.pz_z.log()
         zs = torch.FloatTensor(T, N, C).to(x.device).fill_(0)
-        zs[T-1] = 1
+        zs[T-1] = 0
         for t in range(T-2, -1, -1):
             zs[t] = pxs[t+1] + torch.logsumexp(zs[t+1].unsqueeze(-1) + pz_z, dim=-1)
         zs[0] += self.pz.log()
@@ -178,6 +178,8 @@ class HMM:
             res += f",n{symbols[i]}"
         with shared_intermediates(cache) as cache:
             result = torch.stack(ubersum(eqn + res, *operands, batch_dims="n"))
+            # Shouldn't Z be the same for all within batch?
+            # is Z wrong here?
             Z, = ubersum(eqn + "->n", *operands, batch_dims="n")
         import pdb; pdb.set_trace()
         marginals = result - Z.unsqueeze(-1)
@@ -319,6 +321,7 @@ def marginal_experiments(hmm):
     betas_m, _ = hmm.backward_m(xs)
     ab = alphas_m + betas_m
     Z = torch.logsumexp(ab, dim=-1, keepdim=True)
+    # shouldn't all the Z's be the same at each timestep?
     # log marginals
     m = ab - Z
     with shared_intermediates() as cache:
