@@ -96,6 +96,10 @@ class HMM:
         self.V = V
         self.C = C
         self.batch_x = False
+        self.pz = torch.rand(C)
+        self.pz_z = torch.rand(C, C)
+        self.px_z = torch.rand(C, V)
+
 
     def guide(self, data):
         return self.model(data, observe=False)
@@ -104,9 +108,9 @@ class HMM:
         V, C = self.V, self.C
         N, T = data.shape
 
-        pz = pyro.param("pz", torch.rand(C), constraint=constraints.simplex)
-        pz_z = pyro.param("pz_z", torch.rand(C, C), constraint=constraints.simplex)
-        px_z = pyro.param("px_z", torch.rand(C, V), constraint=constraints.simplex)
+        pz = pyro.param("pz", self.pz, constraint=constraints.simplex)
+        pz_z = pyro.param("pz_z", self.pz_z, constraint=constraints.simplex)
+        px_z = pyro.param("px_z", self.px_z, constraint=constraints.simplex)
 
         x_iarange = pyro.iarange("T", T)
         with pyro.iarange("n", N, subsample_size=BSZ) as ind:
@@ -129,17 +133,6 @@ class HMM:
                     dxt = ds.Categorical(px_z[z])
                     xt = pyro.sample(f"x", dxt, obs = data[ind].t())
 
-
-class MyHMM:
-    def __init__(self, V, C):
-        self.V = V
-        self.C = C
-        self.batch_x = True
-
-        self.pz = pyro.param("pz", torch.rand(C), constraint=constraints.simplex)
-        self.pz_z = pyro.param("pz_z", torch.rand(C, C), constraint=constraints.simplex)
-        self.px_z = pyro.param("px_z", torch.rand(C, V), constraint=constraints.simplex)
-
     def forward_sample(self, T, N):
         zs = [ds.Categorical(self.pz).sample([N])]
         xs = [ds.Categorical(self.px_z[zs[0]]).sample()]
@@ -150,44 +143,46 @@ class MyHMM:
 
     def forward_m(self, x, cache=None):
         T, N = x.shape
-        pxs = self.px_z[:,xs].permute(1, 2, 0).log() # T x N x C
+        pxs = self.px_z[:,x].permute(1, 2, 0).log() # T x N x C
         pz_z = self.pz_z.log()
         zs = torch.FloatTensor(T, N, C).to(x.device).fill_(0)
         zs[0] = pxs[0] + self.pz.log()
         for t in range(1, T):
-            zs[t] = pxs[t] + torch.logsumexp(zs[t-1].unsqueeze(-1) + pz_z, dim=-1)
-        return zs.exp(), cache
-
-    def forward_e(self, x, cache=None):
-        with shared_intermediates(cache):
-            # do i need to pass in log px's as ref?
-            pxs = self.px_z[:,xs].permute(1, 2, 0).log() # T x N x C
-            import pdb; pdb.set_trace()
+            zs[t] = pxs[t] + torch.logsumexp(zs[t-1].unsqueeze(-1) + pz_z, dim=1)
         return zs, cache
 
     def backward_m(self, x, cache=None):
-        import pdb; pdb.set_trace()
-        return zs, cache
-
-    def backward_e(self, x, cache=None):
-        import pdb; pdb.set_trace()
+        T, N = x.shape
+        pxs = self.px_z[:,x].permute(1, 2, 0).log() # T x N x C
+        pz_z = self.pz_z.log()
+        zs = torch.FloatTensor(T, N, C).to(x.device).fill_(0)
+        zs[T-1] = 1
+        for t in range(T-2, -1, -1):
+            zs[t] = pxs[t+1] + torch.logsumexp(zs[t+1].unsqueeze(-1) + pz_z, dim=-1)
+        zs[0] += self.pz.log()
         return zs, cache
 
     def forward_backward(self, x, cache=None):
+        pxs = self.px_z[:,x].permute(1, 2, 0).log() # T x N x C
+        pz_z = self.pz_z.log()
+        pz = self.pz.log()
+        T, N, C = pxs.shape
+        symbols = "abcdefghijklmopqrstuvwxyz"
+        # "a,na,ab,nb,bc,nc,->na,nb,nc"
+        eqn = "a,na"
+        res = "->na"
+        operands = [pz,pxs[0]]
+        for i in range(1,T):
+            eqn += f",{symbols[i-1]}{symbols[i]},n{symbols[i]}"
+            operands += [pz_z, pxs[i]]
+            res += f",n{symbols[i]}"
+        with shared_intermediates(cache) as cache:
+            result = torch.stack(ubersum(eqn + res, *operands, batch_dims="n"))
+            Z, = ubersum(eqn + "->n", *operands, batch_dims="n")
         import pdb; pdb.set_trace()
-        return zs, cache
+        marginals = result - Z.unsqueeze(-1)
+        return marginals, cache
 
-    def marginals(self, xx):
-        pass
-
-hmm = MyHMM(V, C)
-xs, zs = hmm.forward_sample(5, 2)
-alphas_m, _ = hmm.forward_m(xs)
-betas_m, _ = hmm.backward_m(xs)
-with shared_intermediates() as cache:
-    alphas_e, _ = hmm.forward_e(xs, cache)
-    betas_e, _ = hmm.backward_e(xs, cache)
-import pdb; pdb.set_trace()
 
 class NeuralHMM:
     def __init__(self, V, C):
@@ -224,7 +219,7 @@ class NeuralHMM:
         N, T = data.shape
 
         pz = pyro.param("pz", torch.rand(C), constraint=constraints.simplex)
-        pz_z = pyro.param("px_x", torch.rand(C, C), constraint=constraints.simplex)
+        pz_z = pyro.param("pz_z", torch.rand(C, C), constraint=constraints.simplex)
         if not self.transition:
             px_z = pyro.param("px_z", torch.rand(C, V), constraint=constraints.simplex)
 
@@ -304,21 +299,44 @@ def optimize_direct(model, data, lr=1e-3):
     )
 
     losses = []
-    for epoch in range(1000):
+    for epoch in range(300):
         loss = (svi.step(train_iter.text.transpose(0, 1)) / 
             (train_iter.text.shape[1] * train_iter.text.shape[0]))
         logging.info(f"{epoch}\t{loss}")
         losses.append(loss)
     return losses
-        
-#models = [(HMM(config), 1e-1), (NaiveBayes(config), 1e-1),  RNNMixture(config)]
-#models = [(NaiveBayes(*config), 1e-1)]
-models = [(HMM(*config), 1e-1)]
-models = [(MyHMM(*config), 1e-1)]
 
-traces = []
-for m, lr in models:
-    pyro.clear_param_store()
-    logging.info(m)
-    losses = optimize_direct(m, data, lr)
-    
+def marginal_experiments(hmm):
+    param_store = pyro.get_param_store()
+    param_store.load("param_" + modelstring)
+    # LOL
+    hmm.pz = param_store["pz"]
+    hmm.pz_z = param_store["pz_z"]
+    hmm.px_z = param_store["px_z"]
+
+    xs, zs = hmm.forward_sample(11, 7)
+    alphas_m, _ = hmm.forward_m(xs)
+    betas_m, _ = hmm.backward_m(xs)
+    ab = alphas_m + betas_m
+    Z = torch.logsumexp(ab, dim=-1, keepdim=True)
+    # log marginals
+    m = ab - Z
+    with shared_intermediates() as cache:
+        # log marginals
+        marginals, cache = hmm.forward_backward(xs, cache)
+    import pdb; pdb.set_trace()
+
+
+modelstring = "hmm.pyt"
+import os
+if os.path.exists(modelstring):
+    hmm = torch.load(modelstring)
+else:
+    hmm = HMM(*config)
+    lr = 1e-1
+    logging.info(hmm)
+    losses = optimize_direct(hmm, data, lr)
+    torch.save(hmm, modelstring)
+    pyro.get_param_store().save("param_" + modelstring)
+
+marginal_experiments(hmm)
