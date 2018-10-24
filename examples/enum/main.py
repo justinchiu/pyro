@@ -43,7 +43,7 @@ class Yahoo(data.Dataset):
          super(Yahoo, self).__init__(examples, fields)
 
 yahoo = Yahoo(TEXT)
-C = 10
+C = 4
 TEXT.build_vocab(yahoo, max_size=5000)
 V = len(TEXT.vocab)
 train_iter = next(iter(data.BucketIterator(
@@ -159,14 +159,13 @@ class HMM:
         zs[T-1] = 0
         for t in range(T-2, -1, -1):
             zs[t] = pxs[t+1] + torch.logsumexp(zs[t+1].unsqueeze(-1) + pz_z, dim=-1)
-        zs[0] += self.pz.log()
         return zs, cache
 
     def forward_backward(self, x, cache=None):
         pxs = self.px_z[:,x].permute(1, 2, 0).log() # T x N x C
+        T, N, C = pxs.shape
         pz_z = self.pz_z.log()
         pz = self.pz.log()
-        T, N, C = pxs.shape
         symbols = "abcdefghijklmopqrstuvwxyz"
         # "a,na,ab,nb,bc,nc,->na,nb,nc"
         eqn = "a,na"
@@ -176,12 +175,10 @@ class HMM:
             eqn += f",{symbols[i-1]}{symbols[i]},n{symbols[i]}"
             operands += [pz_z, pxs[i]]
             res += f",n{symbols[i]}"
+        print(f"Einsum: {eqn + res"})
         with shared_intermediates(cache) as cache:
-            result = torch.stack(ubersum(eqn + res, *operands, batch_dims="n"))
-            # Shouldn't Z be the same for all within batch?
-            # is Z wrong here?
-            Z, = ubersum(eqn + "->n", *operands, batch_dims="n")
-        import pdb; pdb.set_trace()
+            result = torch.stack(ubersum(eqn + res, *operands))
+            Z, = ubersum(eqn + "->n", *operands)
         marginals = result - Z.unsqueeze(-1)
         return marginals, cache
 
@@ -301,7 +298,7 @@ def optimize_direct(model, data, lr=1e-3):
     )
 
     losses = []
-    for epoch in range(300):
+    for epoch in range(10):
         loss = (svi.step(train_iter.text.transpose(0, 1)) / 
             (train_iter.text.shape[1] * train_iter.text.shape[0]))
         logging.info(f"{epoch}\t{loss}")
