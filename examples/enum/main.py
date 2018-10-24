@@ -175,7 +175,7 @@ class HMM:
             eqn += f",{symbols[i-1]}{symbols[i]},n{symbols[i]}"
             operands += [pz_z, pxs[i]]
             res += f",n{symbols[i]}"
-        print(f"Einsum: {eqn + res"})
+        print(f"Einsum: {eqn + res}")
         with shared_intermediates(cache) as cache:
             result = torch.stack(ubersum(eqn + res, *operands))
             Z, = ubersum(eqn + "->n", *operands)
