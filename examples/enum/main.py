@@ -158,7 +158,7 @@ class HMM:
         zs = torch.FloatTensor(T, N, C).to(x.device).fill_(0)
         zs[T-1] = 0
         for t in range(T-2, -1, -1):
-            zs[t] = pxs[t+1] + torch.logsumexp(zs[t+1].unsqueeze(-1) + pz_z, dim=-1)
+            zs[t] = torch.logsumexp((pxs[t+1] + zs[t+1]).unsqueeze(-2) + pz_z, dim=-1)
         return zs, cache
 
     def forward_backward(self, x, cache=None):
@@ -169,7 +169,7 @@ class HMM:
         symbols = "abcdefghijklmopqrstuvwxyz"
         # "a,na,ab,nb,bc,nc,->na,nb,nc"
         eqn = "a,na"
-        res = "->na"
+        res = "->n,na"
         operands = [pz,pxs[0]]
         for i in range(1,T):
             eqn += f",{symbols[i-1]}{symbols[i]},n{symbols[i]}"
@@ -177,9 +177,10 @@ class HMM:
             res += f",n{symbols[i]}"
         print(f"Einsum: {eqn + res}")
         with shared_intermediates(cache) as cache:
-            result = torch.stack(ubersum(eqn + res, *operands))
-            Z, = ubersum(eqn + "->n", *operands)
-        marginals = result - Z.unsqueeze(-1)
+            result = ubersum(eqn + res, *operands)
+        marginals = torch.stack(result[1:]) - result[0].unsqueeze(-1)
+        ok = torch.stack(result[1:])
+        print(torch.logsumexp(ok, dim=-1))
         return marginals, cache
 
 
@@ -313,7 +314,7 @@ def marginal_experiments(hmm):
     hmm.pz_z = param_store["pz_z"]
     hmm.px_z = param_store["px_z"]
 
-    xs, zs = hmm.forward_sample(11, 7)
+    xs, zs = hmm.forward_sample(5, 3)
     alphas_m, _ = hmm.forward_m(xs)
     betas_m, _ = hmm.backward_m(xs)
     ab = alphas_m + betas_m
