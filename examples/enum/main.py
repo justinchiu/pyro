@@ -167,7 +167,6 @@ class HMM:
         pz_z = self.pz_z.log()
         pz = self.pz.log()
         symbols = "abcdefghijklmopqrstuvwxyz"
-        # "a,na,ab,nb,bc,nc,->na,nb,nc"
         eqn = "a,na"
         res = "->n,na"
         operands = [pz, pxs[0]]
@@ -179,8 +178,6 @@ class HMM:
         with shared_intermediates(cache) as cache:
             result = ubersum(eqn + res, *operands)
         marginals = torch.stack(result[1:]) - result[0].unsqueeze(-1)
-        ok = torch.stack(result[1:])
-        print(torch.logsumexp(ok, dim=-1))
         return marginals, cache
 
 
