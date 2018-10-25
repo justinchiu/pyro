@@ -170,7 +170,7 @@ class HMM:
         # "a,na,ab,nb,bc,nc,->na,nb,nc"
         eqn = "a,na"
         res = "->n,na"
-        operands = [pz,pxs[0]]
+        operands = [pz, pxs[0]]
         for i in range(1,T):
             eqn += f",{symbols[i-1]}{symbols[i]},n{symbols[i]}"
             operands += [pz_z, pxs[i]]
